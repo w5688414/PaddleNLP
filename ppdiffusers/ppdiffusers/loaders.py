@@ -26,6 +26,7 @@ from .utils import (
     FROM_HF_HUB,
     HF_HUB_OFFLINE,
     PPDIFFUSERS_CACHE,
+    TO_DIFFUSERS,
     _add_variant,
     _get_model_file,
     is_safetensors_available,
@@ -269,7 +270,7 @@ class UNet2DConditionLoadersMixin:
         save_function: Callable = None,
         safe_serialization: bool = True,
         variant: Optional[str] = None,
-        to_diffusers: Optional[bool] = False,
+        to_diffusers: Optional[bool] = None,
     ):
         r"""
         Save an attention processor to a directory, so that it can be re-loaded using the
@@ -288,11 +289,13 @@ class UNet2DConditionLoadersMixin:
                 `DIFFUSERS_SAVE_MODE`.
             variant (`str`, *optional*):
                 If specified, weights are saved in the format pytorch_model.<variant>.bin.
-            to_diffusers (`bool`, *optional*, defaults to `False`):
+            to_diffusers (`bool`, *optional*, defaults to `None`):
                 If specified, weights are saved in the format of torch. eg. linear need transpose.
             safe_serialization (`bool`, *optional*, defaults to `True`):
                 Only when `to_diffusers` is True, Whether to save the model using `safetensors` or the traditional PyTorch way (that uses `pickle`).
         """
+        if to_diffusers is None:
+            to_diffusers = TO_DIFFUSERS
         if to_diffusers and safe_serialization and not is_safetensors_available():
             raise ImportError("`safe_serialization` requires the `safetensors library: `pip install safetensors`.")
 

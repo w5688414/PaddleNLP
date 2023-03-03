@@ -47,3 +47,4 @@ NEG_INF = -1e4
 
 FROM_HF_HUB = os.getenv("FROM_HF_HUB", False)
 FROM_DIFFUSERS = os.getenv("FROM_DIFFUSERS", False)
+TO_DIFFUSERS = os.getenv("TO_DIFFUSERS", False)

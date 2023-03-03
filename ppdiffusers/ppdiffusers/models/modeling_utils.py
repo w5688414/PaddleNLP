@@ -29,6 +29,7 @@ from ..utils import (
     HF_HUB_OFFLINE,
     PADDLE_WEIGHTS_NAME,
     PPDIFFUSERS_CACHE,
+    TO_DIFFUSERS,
     TORCH_SAFETENSORS_WEIGHTS_NAME,
     TORCH_WEIGHTS_NAME,
     _add_variant,
@@ -48,7 +49,8 @@ logger = logging.get_logger(__name__)
 
 
 if is_safetensors_available():
-    import safetensors
+    from safetensors.numpy import save_file as safetensors_numpy_save_file
+    from safetensors.torch import save_file as safetensors_torch_save_file
 
 if is_torch_available():
     import torch
@@ -76,7 +78,7 @@ def get_parameter_dtype(parameter: nn.Layer) -> paddle.dtype:
 
 def convert_state_dict(state_dict, framework="torch"):
     if framework in ["torch", "pt"]:
-        state_dict = {k: paddle.to_tensor(v.cpu().numpy()) for k, v in state_dict.items()}
+        state_dict = {k: torch.tensor(v.cpu().numpy()) for k, v in state_dict.items()}
         return state_dict
     elif framework in ["numpy", "np"]:
         state_dict = {k: v.cpu().numpy() for k, v in state_dict.items()}
@@ -197,7 +199,7 @@ class ModelMixin(nn.Layer):
         save_function: Callable = None,
         safe_serialization: bool = True,
         variant: Optional[str] = None,
-        to_diffusers: Optional[bool] = False,
+        to_diffusers: Optional[bool] = None,
     ):
         """
         Save a model and its configuration file to a directory, so that it can be re-loaded using the
@@ -221,6 +223,8 @@ class ModelMixin(nn.Layer):
             safe_serialization (`bool`, *optional*, defaults to `True`):
                 Only when `to_diffusers` is True, Whether to save the model using `safetensors` or the traditional PyTorch way (that uses `pickle`).
         """
+        if to_diffusers is None:
+            to_diffusers = TO_DIFFUSERS
         if to_diffusers and safe_serialization and not is_safetensors_available():
             raise ImportError("`safe_serialization` requires the `safetensors library: `pip install safetensors`.")
 
@@ -245,10 +249,10 @@ class ModelMixin(nn.Layer):
             if to_diffusers:
                 if safe_serialization:
                     if is_torch_available():
-                        save_function = safetensors.torch.save_file
+                        save_function = safetensors_torch_save_file
                         state_dict = convert_state_dict(state_dict, framework="torch")
                     else:
-                        save_function = safetensors.numpy.save_file
+                        save_function = safetensors_numpy_save_file
                         state_dict = convert_state_dict(state_dict, framework="numpy")
                     weights_name = _add_variant(TORCH_SAFETENSORS_WEIGHTS_NAME, variant)
                 else:
