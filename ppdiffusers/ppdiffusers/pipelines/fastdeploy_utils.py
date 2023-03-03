@@ -22,11 +22,11 @@ from typing import Dict, Optional, Union
 
 import numpy as np
 
-from .. import __version__
 from ..utils import (
     DIFFUSERS_CACHE,
     FASTDEPLOY_MODEL_NAME,
     FASTDEPLOY_WEIGHTS_NAME,
+    FROM_HF_HUB,
     HF_HUB_OFFLINE,
     PPDIFFUSERS_CACHE,
     _add_variant,
@@ -35,6 +35,7 @@ from ..utils import (
     is_paddle_available,
     logging,
 )
+from ..version import VERSION as __version__
 
 __all__ = ["FastDeployRuntimeModel"]
 
@@ -293,7 +294,7 @@ class FastDeployRuntimeModel:
         runtime_options: Optional["fd.RuntimeOption"] = None,
         **kwargs,
     ):
-        from_hf_hub = kwargs.pop("from_hf_hub", False)
+        from_hf_hub = kwargs.pop("from_hf_hub", FROM_HF_HUB)
         cache_dir = (
             kwargs.pop("cache_dir", DIFFUSERS_CACHE) if from_hf_hub else kwargs.pop("cache_dir", PPDIFFUSERS_CACHE)
         )

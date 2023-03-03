@@ -222,6 +222,7 @@ if is_paddle_available() and is_paddlenlp_available():
 
     from .utils import (
         DIFFUSERS_CACHE,
+        FROM_HF_HUB,
         HF_HUB_OFFLINE,
         PPDIFFUSERS_CACHE,
         _get_model_file,
@@ -232,7 +233,7 @@ if is_paddle_available() and is_paddlenlp_available():
 
     @classmethod
     def get_image_processor_dict(cls, pretrained_model_name_or_path, **kwargs):
-        from_hf_hub = kwargs.pop("from_hf_hub", False)
+        from_hf_hub = kwargs.pop("from_hf_hub", FROM_HF_HUB)
         cache_dir = (
             kwargs.pop("cache_dir", DIFFUSERS_CACHE) if from_hf_hub else kwargs.pop("cache_dir", PPDIFFUSERS_CACHE)
         )

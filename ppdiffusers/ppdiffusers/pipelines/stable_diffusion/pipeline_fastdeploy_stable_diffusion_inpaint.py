@@ -21,7 +21,6 @@ import PIL
 
 from paddlenlp.transformers import CLIPFeatureExtractor, CLIPTokenizer
 
-from ...fastdeploy_utils import FastDeployRuntimeModel
 from ...pipeline_utils import DiffusionPipeline
 from ...schedulers import (
     DDIMScheduler,
@@ -32,6 +31,7 @@ from ...schedulers import (
     PNDMScheduler,
 )
 from ...utils import PIL_INTERPOLATION, logging
+from ..fastdeploy_utils import FastDeployRuntimeModel
 from . import StableDiffusionPipelineOutput
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name

@@ -74,7 +74,7 @@ else:
         StableDiffusionMegaPipeline,
         StableDiffusionPanoramaPipeline,
         StableDiffusionPipeline,
-        StableDiffusionPipelineAllInOne,
+        StableDiffusionPipelineAllinOne,
         StableDiffusionPix2PixZeroPipeline,
         StableDiffusionSAGPipeline,
         StableDiffusionUpscalePipeline,

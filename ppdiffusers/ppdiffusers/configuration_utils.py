@@ -26,7 +26,6 @@ from typing import Any, Dict, Tuple, Union
 
 import numpy as np
 
-from . import __version__
 from .utils import (
     DIFFUSERS_CACHE,
     PPDIFFUSERS_CACHE,
@@ -35,6 +34,8 @@ from .utils import (
     deprecate,
     logging,
 )
+from .utils.constants import FROM_HF_HUB
+from .version import VERSION as __version__
 
 logger = logging.get_logger(__name__)
 
@@ -289,7 +290,7 @@ class ConfigMixin:
 
         </Tip>
         """
-        from_hf_hub = kwargs.pop("from_hf_hub", False)
+        from_hf_hub = kwargs.pop("from_hf_hub", FROM_HF_HUB)
         cache_dir = (
             kwargs.pop("cache_dir", DIFFUSERS_CACHE) if from_hf_hub else kwargs.pop("cache_dir", PPDIFFUSERS_CACHE)
         )

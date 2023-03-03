@@ -21,10 +21,11 @@ from typing import Callable, Optional, Union
 import paddle
 import paddle.nn as nn
 
-from .. import __version__
 from ..utils import (
     CONFIG_NAME,
     DIFFUSERS_CACHE,
+    FROM_DIFFUSERS,
+    FROM_HF_HUB,
     HF_HUB_OFFLINE,
     PADDLE_WEIGHTS_NAME,
     PPDIFFUSERS_CACHE,
@@ -37,6 +38,7 @@ from ..utils import (
     logging,
     smart_load,
 )
+from ..version import VERSION as __version__
 from .modeling_pytorch_paddle_utils import (
     convert_paddle_state_dict_to_pytorch,
     convert_pytorch_state_dict_to_paddle,
@@ -338,13 +340,13 @@ class ModelMixin(nn.Layer):
         </Tip>
 
         """
-        from_hf_hub = kwargs.pop("from_hf_hub", False)
+        from_hf_hub = kwargs.pop("from_hf_hub", FROM_HF_HUB)
         cache_dir = (
             kwargs.pop("cache_dir", DIFFUSERS_CACHE) if from_hf_hub else kwargs.pop("cache_dir", PPDIFFUSERS_CACHE)
         )
         ignore_mismatched_sizes = kwargs.pop("ignore_mismatched_sizes", False)
         force_download = kwargs.pop("force_download", False)
-        from_diffusers = kwargs.pop("from_diffusers", False)
+        from_diffusers = kwargs.pop("from_diffusers", FROM_DIFFUSERS)
         resume_download = kwargs.pop("resume_download", False)
         proxies = kwargs.pop("proxies", None)
         output_loading_info = kwargs.pop("output_loading_info", False)

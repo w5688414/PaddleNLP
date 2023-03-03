@@ -41,13 +41,14 @@ from packaging import version
 from PIL import Image
 from tqdm.auto import tqdm
 
-from .. import __version__
 from ..configuration_utils import ConfigMixin
 from ..schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from ..utils import (
     CONFIG_NAME,
     DEPRECATED_REVISION_ARGS,
     DIFFUSERS_CACHE,
+    FROM_DIFFUSERS,
+    FROM_HF_HUB,
     HF_HUB_OFFLINE,
     PPDIFFUSERS_CACHE,
     TORCH_SAFETENSORS_WEIGHTS_NAME,
@@ -63,6 +64,7 @@ from ..utils import (
     ppdiffusers_bos_dir_download,
     ppdiffusers_url_download,
 )
+from ..version import VERSION as __version__
 
 if is_paddle_available():
     import paddle
@@ -568,14 +570,14 @@ class DiffusionPipeline(ConfigMixin):
         local_files_only = kwargs.pop("local_files_only", HF_HUB_OFFLINE)
         use_auth_token = kwargs.pop("use_auth_token", None)
         revision = kwargs.pop("revision", None)
-        from_diffusers = kwargs.pop("from_diffusers", False)
+        from_diffusers = kwargs.pop("from_diffusers", FROM_DIFFUSERS)
         paddle_dtype = kwargs.pop("paddle_dtype", None)
         custom_pipeline = kwargs.pop("custom_pipeline", None)
         custom_revision = kwargs.pop("custom_revision", None)
         runtime_options = kwargs.pop("runtime_options", None)
         return_cached_folder = kwargs.pop("return_cached_folder", False)
         variant = kwargs.pop("variant", None)
-        from_hf_hub = kwargs.pop("from_hf_hub", False)
+        from_hf_hub = kwargs.pop("from_hf_hub", FROM_HF_HUB)
         cache_dir = (
             kwargs.pop("cache_dir", DIFFUSERS_CACHE) if from_hf_hub else kwargs.pop("cache_dir", PPDIFFUSERS_CACHE)
         )

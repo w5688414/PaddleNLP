@@ -17,7 +17,7 @@ import os
 
 from packaging import version
 
-from .. import __version__
+from ..version import VERSION as __version__
 from . import initializer_utils, ppnlp_patch_utils
 from .constants import (
     CONFIG_NAME,
@@ -25,6 +25,8 @@ from .constants import (
     DIFFUSERS_CACHE,
     FASTDEPLOY_MODEL_NAME,
     FASTDEPLOY_WEIGHTS_NAME,
+    FROM_DIFFUSERS,
+    FROM_HF_HUB,
     HF_MODULES_CACHE,
     HUGGINGFACE_CO_RESOLVE_ENDPOINT,
     NEG_INF,

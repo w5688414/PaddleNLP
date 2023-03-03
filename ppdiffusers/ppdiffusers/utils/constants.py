@@ -44,3 +44,6 @@ TEST_DOWNLOAD_SERVER = "https://paddlenlp.bj.bcebos.com/models/community/ppdiffu
 PPNLP_BOS_RESOLVE_ENDPOINT = os.getenv("PPNLP_ENDPOINT", "https://bj.bcebos.com/paddlenlp")
 DEPRECATED_REVISION_ARGS = ["fp16", "non-ema"]
 NEG_INF = -1e4
+
+FROM_HF_HUB = os.getenv("FROM_HF_HUB", False)
+FROM_DIFFUSERS = os.getenv("FROM_DIFFUSERS", False)

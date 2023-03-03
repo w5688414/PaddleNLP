@@ -22,6 +22,8 @@ from .models.cross_attention import LoRACrossAttnProcessor
 from .models.modeling_utils import convert_state_dict
 from .utils import (
     DIFFUSERS_CACHE,
+    FROM_DIFFUSERS,
+    FROM_HF_HUB,
     HF_HUB_OFFLINE,
     PPDIFFUSERS_CACHE,
     _add_variant,
@@ -150,13 +152,13 @@ class UNet2DConditionLoadersMixin:
 
         </Tip>
         """
-        from_hf_hub = kwargs.pop("from_hf_hub", False)
+        from_hf_hub = kwargs.pop("from_hf_hub", FROM_HF_HUB)
         cache_dir = (
             kwargs.pop("cache_dir", DIFFUSERS_CACHE) if from_hf_hub else kwargs.pop("cache_dir", PPDIFFUSERS_CACHE)
         )
         force_download = kwargs.pop("force_download", False)
         resume_download = kwargs.pop("resume_download", False)
-        from_diffusers = kwargs.pop("from_diffusers", False)
+        from_diffusers = kwargs.pop("from_diffusers", FROM_DIFFUSERS)
         proxies = kwargs.pop("proxies", None)
         local_files_only = kwargs.pop("local_files_only", HF_HUB_OFFLINE)
         use_auth_token = kwargs.pop("use_auth_token", None)

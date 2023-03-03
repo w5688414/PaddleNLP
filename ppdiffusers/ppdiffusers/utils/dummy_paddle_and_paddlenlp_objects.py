@@ -271,7 +271,7 @@ class StableDiffusionMegaPipeline(metaclass=DummyObject):
         requires_backends(cls, ["paddle", "paddlenlp"])
 
 
-class StableDiffusionPipelineAllInOne(metaclass=DummyObject):
+class StableDiffusionPipelineAllinOne(metaclass=DummyObject):
     _backends = ["paddle", "paddlenlp"]
 
     def __init__(self, *args, **kwargs):

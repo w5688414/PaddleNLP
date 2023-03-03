@@ -20,7 +20,7 @@ from packaging import version
 
 
 def deprecate(*args, take_from: Optional[Union[Dict, Any]] = None, standard_warn=True):
-    from .. import __version__
+    from ..version import VERSION as __version__
 
     deprecated_kwargs = take_from
     values = ()

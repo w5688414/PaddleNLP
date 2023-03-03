@@ -140,7 +140,7 @@ else:
         StableDiffusionMegaPipeline,
         StableDiffusionPanoramaPipeline,
         StableDiffusionPipeline,
-        StableDiffusionPipelineAllInOne,
+        StableDiffusionPipelineAllinOne,
         StableDiffusionPipelineSafe,
         StableDiffusionPix2PixZeroPipeline,
         StableDiffusionSAGPipeline,

@@ -28,7 +28,7 @@ from urllib import request
 
 from huggingface_hub import HfFolder, cached_download, hf_hub_download, model_info
 
-from .. import __version__
+from ..version import VERSION as __version__
 from . import PPDIFFUSERS_DYNAMIC_MODULE_NAME, PPDIFFUSERS_MODULES_CACHE, logging
 
 COMMUNITY_PIPELINES_URL = (

@@ -22,7 +22,6 @@ import paddle
 
 from paddlenlp.transformers import CLIPFeatureExtractor, CLIPTokenizer
 
-from ...fastdeploy_utils import FastDeployRuntimeModel
 from ...pipeline_utils import DiffusionPipeline
 from ...schedulers import (
     DDIMScheduler,
@@ -37,6 +36,7 @@ from ...schedulers.preconfig import (
     PreconfigLMSDiscreteScheduler,
 )
 from ...utils import logging
+from ..fastdeploy_utils import FastDeployRuntimeModel
 from . import StableDiffusionPipelineOutput
 
 logger = logging.get_logger(__name__)
