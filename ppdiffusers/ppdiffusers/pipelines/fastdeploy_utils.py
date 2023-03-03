@@ -1,4 +1,4 @@
-# Copyright (c) 2022 PaddlePaddle Authors. All Rights Reserved.
+# coding=utf-8
 # Copyright 2022 The HuggingFace Inc. team.
 # Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
 #
@@ -14,25 +14,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 import os
 import shutil
 from pathlib import Path
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
 import numpy as np
 
-from .download_utils import ppdiffusers_bos_download
-from .utils import (
+from .. import __version__
+from ..utils import (
+    DIFFUSERS_CACHE,
     FASTDEPLOY_MODEL_NAME,
     FASTDEPLOY_WEIGHTS_NAME,
+    HF_HUB_OFFLINE,
+    PPDIFFUSERS_CACHE,
+    _add_variant,
+    _get_model_file,
     is_fastdeploy_available,
     is_paddle_available,
     logging,
 )
 
+__all__ = ["FastDeployRuntimeModel"]
+
 if is_paddle_available():
     import paddle
-
 
 if is_fastdeploy_available():
     import fastdeploy as fd
@@ -65,8 +72,8 @@ class FastDeployRuntimeModel:
         logger.info("`ppdiffusers.FastDeployRuntimeModel` is experimental and might change in the future.")
         self.model = model
         self.model_save_dir = kwargs.get("model_save_dir", None)
-        self.latest_model_name = kwargs.get("latest_model_name", "inference.pdmodel")
-        self.latest_params_name = kwargs.get("latest_params_name", "inference.pdiparams")
+        self.latest_model_name = kwargs.get("latest_model_name", FASTDEPLOY_MODEL_NAME)
+        self.latest_params_name = kwargs.get("latest_params_name", FASTDEPLOY_WEIGHTS_NAME)
 
     def zero_copy_infer(self, prebinded_inputs: dict, prebinded_outputs: dict, share_with_raw_ptr=True, **kwargs):
         """
@@ -182,34 +189,54 @@ class FastDeployRuntimeModel:
     def _from_pretrained(
         cls,
         pretrained_model_name_or_path: Union[str, Path],
-        cache_dir: Optional[str] = None,
         model_file_name: Optional[str] = None,
         params_file_name: Optional[str] = None,
+        use_auth_token: Optional[Union[bool, str, None]] = None,
+        revision: Optional[str] = None,
+        subfolder: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: Optional[str] = None,
         runtime_options: Optional["fd.RuntimeOption"] = None,
+        from_hf_hub: Optional[bool] = False,
+        proxies: Optional[Dict] = None,
+        resume_download: bool = False,
+        local_files_only: bool = False,
+        user_agent: Union[Dict, str, None] = None,
         **kwargs,
     ):
         """
-        Load a model from a directory or the BOS.
+        Load a model from a directory or the HF Hub.
 
         Arguments:
             pretrained_model_name_or_path (`str` or `Path`):
                 Directory from which to load
-            cache_dir (`Union[str, Path]`, *optional*):
-                Path to a directory in which a downloaded pretrained model configuration should be cached if the
-                standard cache should not be used.
             model_file_name (`str`):
                 Overwrites the default model file name from `"inference.pdmodel"` to `file_name`. This allows you to load
                 different model files from the same repository or directory.
             params_file_name (`str`):
                 Overwrites the default params file name from `"inference.pdiparams"` to `file_name`. This allows you to load
                 different model files from the same repository or directory.
+            use_auth_token (`str` or `bool`):
+                Is needed to load models from a private or gated repository
+            revision (`str`):
+                Revision is the specific model version to use. It can be a branch name, a tag name, or a commit id
+            cache_dir (`Union[str, Path]`, *optional*):
+                Path to a directory in which a downloaded pretrained model configuration should be cached if the
+                standard cache should not be used.
+            force_download (`bool`, *optional*, defaults to `False`):
+                Whether or not to force the (re-)download of the model weights and configuration files, overriding the
+                cached versions if they exist.
             runtime_options (`fastdeploy.RuntimeOption`, *optional*):
                 The RuntimeOption of fastdeploy.
+            subfolder (`str`, *optional*, defaults to `""`):
+                In case the relevant files are located inside a subfolder of the model repo (either remote in
+                huggingface.co or downloaded locally), you can specify the folder name here.
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
         model_file_name = model_file_name if model_file_name is not None else FASTDEPLOY_MODEL_NAME
         params_file_name = params_file_name if params_file_name is not None else FASTDEPLOY_WEIGHTS_NAME
+
         # load model from local directory
         if os.path.isdir(pretrained_model_name_or_path):
             model = FastDeployRuntimeModel.load_model(
@@ -218,19 +245,36 @@ class FastDeployRuntimeModel:
                 runtime_options=runtime_options,
             )
             kwargs["model_save_dir"] = Path(pretrained_model_name_or_path)
-        # load model from hub
+        # load model from hub or paddle bos
         else:
-            # download model
-            model_cache_path = ppdiffusers_bos_download(
+            model_cache_path = _get_model_file(
                 pretrained_model_name_or_path=pretrained_model_name_or_path,
-                filename=model_file_name,
+                weights_name=model_file_name,
+                subfolder=subfolder,
                 cache_dir=cache_dir,
+                force_download=force_download,
+                revision=revision,
+                from_hf_hub=from_hf_hub,
+                proxies=proxies,
+                resume_download=resume_download,
+                local_files_only=local_files_only,
+                use_auth_token=use_auth_token,
+                user_agent=user_agent,
             )
-            # download params
-            params_cache_path = ppdiffusers_bos_download(
+
+            params_cache_path = _get_model_file(
                 pretrained_model_name_or_path=pretrained_model_name_or_path,
-                filename=params_file_name,
+                weights_name=params_file_name,
+                subfolder=subfolder,
                 cache_dir=cache_dir,
+                force_download=force_download,
+                revision=revision,
+                from_hf_hub=from_hf_hub,
+                proxies=proxies,
+                resume_download=resume_download,
+                local_files_only=local_files_only,
+                use_auth_token=use_auth_token,
+                user_agent=user_agent,
             )
             kwargs["model_save_dir"] = Path(model_cache_path).parent
             kwargs["latest_model_name"] = Path(model_cache_path).name
@@ -244,17 +288,44 @@ class FastDeployRuntimeModel:
     def from_pretrained(
         cls,
         pretrained_model_name_or_path: Union[str, Path],
-        cache_dir: Optional[str] = None,
         model_file_name: Optional[str] = None,
         params_file_name: Optional[str] = None,
         runtime_options: Optional["fd.RuntimeOption"] = None,
-        **model_kwargs,
+        **kwargs,
     ):
+        from_hf_hub = kwargs.pop("from_hf_hub", False)
+        cache_dir = (
+            kwargs.pop("cache_dir", DIFFUSERS_CACHE) if from_hf_hub else kwargs.pop("cache_dir", PPDIFFUSERS_CACHE)
+        )
+        force_download = kwargs.pop("force_download", False)
+        resume_download = kwargs.pop("resume_download", False)
+        proxies = kwargs.pop("proxies", None)
+        local_files_only = kwargs.pop("local_files_only", HF_HUB_OFFLINE)
+        use_auth_token = kwargs.pop("use_auth_token", None)
+        revision = kwargs.pop("revision", None)
+        subfolder = kwargs.pop("subfolder", None)
+        variant = kwargs.pop("variant", None)
+
+        user_agent = {
+            "ppdiffusers": __version__,
+            "file_type": "model",
+            "framework": "fastdeploy",
+        }
+
         return cls._from_pretrained(
             pretrained_model_name_or_path=pretrained_model_name_or_path,
+            model_file_name=_add_variant(model_file_name, variant),
+            params_file_name=_add_variant(params_file_name, variant),
+            use_auth_token=use_auth_token,
+            revision=revision,
+            subfolder=subfolder,
+            force_download=force_download,
             cache_dir=cache_dir,
-            model_file_name=model_file_name,
-            params_file_name=params_file_name,
             runtime_options=runtime_options,
-            **model_kwargs,
+            from_hf_hub=from_hf_hub,
+            proxies=proxies,
+            resume_download=resume_download,
+            local_files_only=local_files_only,
+            user_agent=user_agent,
+            **kwargs,
         )

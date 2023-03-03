@@ -16,13 +16,24 @@ import builtins
 import contextlib
 import copy
 import functools
-import time
 import weakref
 from collections import OrderedDict
 from types import FunctionType, MethodType
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .utils import is_paddle_available, is_paddlenlp_available
+from .constants import DIFFUSERS_CACHE, PPDIFFUSERS_CACHE
+from .hub_utils import HF_HUB_OFFLINE
+from .import_utils import (
+    is_paddle_available,
+    is_paddlenlp_available,
+    is_safetensors_available,
+)
+from .load_utils import smart_load
+from .logging import get_logger
+
+logger = get_logger(__name__)
+
+__all__ = []
 
 
 def copy_func(f):
@@ -65,87 +76,72 @@ if is_paddle_available():
     import paddle
     import paddle.nn as nn
 
+    paddle.long = paddle.int64
+    paddle.int = paddle.int32
+    paddle.double = paddle.float64
+    paddle.half = paddle.float16
+    paddle.from_numpy = paddle.to_tensor
+    paddle.Tensor.half = lambda x: paddle.cast(x, paddle.float16)
+    paddle.Tensor.float = lambda x: paddle.cast(x, paddle.float32)
+    paddle.Tensor.double = lambda x: paddle.cast(x, paddle.float64)
+    paddle.Tensor.int = lambda x: paddle.cast(x, paddle.int32)
+    paddle.Tensor.long = lambda x: paddle.cast(x, paddle.int64)
+    paddle.Tensor.bool = lambda x: paddle.cast(x, paddle.bool)
+    paddle.Tensor.bfloat16 = lambda x: paddle.cast(x, paddle.bfloat16)
+    paddle.Tensor.clamp = paddle.clip
+    paddle.clamp = paddle.clip
+
+    def view_pt(x, *shape: builtins.int, name=None):
+        return paddle.reshape(x, shape=shape, name=name)
+
+    paddle.view = view_pt
+    paddle.Tensor.view = view_pt
+    setattr(paddle.Tensor, "data", property(lambda x: x))
+    paddle.Tensor.data_ptr = lambda x: x.value().get_tensor()._ptr()
+
+    def permute_pt(x, *perm: builtins.int, name=None):
+        return paddle.transpose(x, perm=perm, name=name)
+
+    paddle.permute = permute_pt
+    paddle.Tensor.permute = permute_pt
+    paddle.cat = paddle.concat
+    paddle.Tensor.softmax = nn.functional.softmax
+
+    def size_pt(self, i=None):
+        if i is None:
+            return self.shape
+        return self.shape[i]
+
+    paddle.Tensor.size = size_pt
+    paddle.Tensor.contiguous = lambda x: x
+
+    # must return self!
+    @patch_to(nn.Layer)
+    def eval(self):
+        # Layer-level setting
+        self.training = False
+        for layer in self.sublayers():
+            layer.training = False
+        return self
+
+    @patch_to(nn)
+    def Parameter(data: paddle.Tensor, requires_grad=True):
+        tensor = paddle.create_parameter(data.shape, dtype=data.dtype, default_initializer=nn.initializer.Assign(data))
+        if not requires_grad:
+            tensor.stop_gradient = True
+        return tensor
+
     @contextlib.contextmanager
     def device_scope(device="cpu"):
         new_device = device.replace("cuda", "gpu")
         old_device = paddle.get_device()
-        if str(new_device) == str(old_device):
+        try:
+            paddle.set_device(new_device)
             yield
-        else:
-            try:
-                paddle.set_device(new_device)
-                yield
-            finally:
-                paddle.set_device(old_device)
+        finally:
+            paddle.set_device(old_device)
 
     paddle.device_scope = device_scope
-
-    class RNGStatesTracker:
-        def __init__(self):
-            self.states_ = {}
-
-        def reset(self):
-            self.states_ = {}
-
-        def remove(self, generator_name=None):
-            if generator_name is not None:
-                del self.states_[generator_name]
-
-        def manual_seed(self, seed, generator_name=None):
-            if generator_name is None:
-                generator_name = str(time.time())
-            if generator_name in self.states_:
-                raise ValueError("state {} already exists".format(generator_name))
-            orig_rng_state = paddle.get_cuda_rng_state()
-            paddle.seed(seed)
-            self.states_[generator_name] = paddle.get_cuda_rng_state()
-            paddle.set_cuda_rng_state(orig_rng_state)
-            return generator_name
-
-        @contextlib.contextmanager
-        def rng_state(self, generator_name=None):
-            if generator_name is not None:
-                if generator_name not in self.states_:
-                    raise ValueError("state {} does not exist".format(generator_name))
-                orig_cuda_rng_state = paddle.get_cuda_rng_state()
-                paddle.set_cuda_rng_state(self.states_[generator_name])
-                try:
-                    yield
-                finally:
-                    self.states_[generator_name] = paddle.get_cuda_rng_state()
-                    paddle.set_cuda_rng_state(orig_cuda_rng_state)
-            else:
-                yield
-
-    RNG_STATE_TRACKER = RNGStatesTracker()
-
-    def get_rng_state_tracker(*args, **kwargs):
-        return RNG_STATE_TRACKER
-
-    paddle.Generator = get_rng_state_tracker
-    randn = paddle.randn
-
-    def randn_pt(shape, dtype=None, name=None, **kwargs):
-        generator = kwargs.get("generator", None)
-        if generator is None:
-            return randn(shape, dtype=dtype, name=name)
-        else:
-            with get_rng_state_tracker().rng_state(generator):
-                return randn(shape, dtype=dtype, name=name)
-
-    paddle.randn = randn_pt
-
-    rand = paddle.rand
-
-    def rand_pt(shape, dtype=None, name=None, **kwargs):
-        generator = kwargs.get("generator", None)
-        if generator is None:
-            return randn(shape, dtype=dtype, name=name)
-        else:
-            with get_rng_state_tracker().rng_state(generator):
-                return rand(shape, dtype=dtype, name=name)
-
-    paddle.rand = rand_pt
 
     @patch_to(nn.Layer)
     def get_sublayer(self, target: str):
@@ -231,14 +227,21 @@ if is_paddle_available() and is_paddlenlp_available():
     import paddle
 
     import paddlenlp.transformers
-    from paddlenlp.transformers import PretrainedModel
+    from paddlenlp import __version__
+    from paddlenlp.transformers import PretrainedConfig, PretrainedModel
 
     @patch_to(PretrainedModel, as_prop=True)
-    def dtype(self):
-        try:
-            return next(self.named_parameters())[1].dtype
-        except StopIteration:
-            return paddle.get_default_dtype()
+    def dtype(parameter: nn.Layer) -> paddle.dtype:
+        last_dtype = None
+        for _, t in parameter.named_parameters():
+            last_dtype = t.dtype
+            if hasattr(t, "is_floating_point"):
+                if t.is_floating_point():
+                    return t.dtype
+            else:
+                if t.dtype in [paddle.float16, paddle.float32, paddle.float64, paddle.bfloat16]:
+                    return t.dtype
+        return last_dtype
 
     @patch_to(PretrainedModel, as_prop=True)
     def device(self):
@@ -261,7 +264,6 @@ if is_paddle_available() and is_paddlenlp_available():
             AddedToken,
             PretrainedTokenizer,
         )
-        from paddlenlp.utils.log import logger
 
         SPIECE_UNDERLINE = "▁"
 
@@ -507,3 +509,189 @@ if is_paddle_available() and is_paddlenlp_available():
             output_attentions,
             return_dict,
         )
+
+    raw_from_pretrained = PretrainedModel.from_pretrained
+
+    TRANSFORMERS_SAFE_WEIGHTS_NAME = "model.safetensors"
+    TRANSFORMERS_WEIGHTS_NAME = "pytorch_model.bin"
+    from .download_utils import _add_variant, _get_model_file
+
+    @classmethod
+    def from_pretrained_model(cls, pretrained_model_name_or_path, *args, from_hf_hub=False, **kwargs):
+        if cls.constructed_from_pretrained_config() and hasattr(cls, "smart_convert"):
+            return cls.from_pretrained_v3(pretrained_model_name_or_path, from_hf_hub=from_hf_hub, *args, **kwargs)
+        return raw_from_pretrained(pretrained_model_name_or_path, *args, from_hf_hub=False, **kwargs)
+
+    @classmethod
+    def from_pretrained_v3_model(cls, pretrained_model_name_or_path, from_hf_hub: bool = False, *args, **kwargs):
+        cache_dir = (
+            kwargs.pop("cache_dir", DIFFUSERS_CACHE) if from_hf_hub else kwargs.pop("cache_dir", PPDIFFUSERS_CACHE)
+        )
+        ignore_mismatched_sizes = kwargs.pop("ignore_mismatched_sizes", False)
+        force_download = kwargs.pop("force_download", False)
+        from_diffusers = kwargs.pop("from_diffusers", False)
+        resume_download = kwargs.pop("resume_download", False)
+        proxies = kwargs.pop("proxies", None)
+        output_loading_info = kwargs.pop("output_loading_info", False)
+        local_files_only = kwargs.pop("local_files_only", HF_HUB_OFFLINE)
+        use_auth_token = kwargs.pop("use_auth_token", None)
+        revision = kwargs.pop("revision", None)
+        paddle_dtype = kwargs.pop("paddle_dtype", None)
+        subfolder = kwargs.pop("subfolder", None)
+        variant = kwargs.pop("variant", None)
+
+        user_agent = {
+            "ppdiffusers": __version__,
+            "file_type": "model",
+            "framework": "paddle",
+        }
+
+        config = None
+        # 1. get the PretrainedConfig to init model
+        if not isinstance(config, PretrainedConfig):
+            config_path = config if config is not None else pretrained_model_name_or_path
+            # must from hf hub
+            if from_hf_hub:
+                if subfolder is not None:
+                    kwargs["subfolder"] = subfolder
+            else:
+                if subfolder is not None:
+                    config_path = os.path.join(config_path, subfolder)
+
+            config = cls.config_class.from_pretrained(
+                config_path,
+                cache_dir=cache_dir,
+                return_unused_kwargs=False,
+                force_download=force_download,
+                from_hf_hub=from_hf_hub,
+                **kwargs,
+            )
+        assert config is not None
+
+        model = cls(config)
+        # This variable will flag if we're loading a sharded checkpoint. In this case the archive file is just the
+        # Load model
+        model_file = None
+        if from_diffusers:
+            if is_safetensors_available():
+                try:
+                    model_file = _get_model_file(
+                        pretrained_model_name_or_path,
+                        weights_name=_add_variant(TRANSFORMERS_SAFE_WEIGHTS_NAME, variant),
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        resume_download=resume_download,
+                        proxies=proxies,
+                        local_files_only=local_files_only,
+                        use_auth_token=use_auth_token,
+                        revision=revision,
+                        subfolder=subfolder,
+                        user_agent=user_agent,
+                        from_hf_hub=from_hf_hub,
+                    )
+                except Exception:  # noqa: E722
+                    pass
+            if model_file is None:
+                model_file = _get_model_file(
+                    pretrained_model_name_or_path,
+                    weights_name=_add_variant(TRANSFORMERS_WEIGHTS_NAME, variant),
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    resume_download=resume_download,
+                    proxies=proxies,
+                    local_files_only=local_files_only,
+                    use_auth_token=use_auth_token,
+                    revision=revision,
+                    subfolder=subfolder,
+                    user_agent=user_agent,
+                    from_hf_hub=from_hf_hub,
+                )
+        else:
+            model_file = _get_model_file(
+                pretrained_model_name_or_path,
+                weights_name=_add_variant("model_state.pdparams", variant),
+                cache_dir=cache_dir,
+                force_download=force_download,
+                resume_download=resume_download,
+                proxies=proxies,
+                local_files_only=local_files_only,
+                use_auth_token=use_auth_token,
+                revision=revision,
+                subfolder=subfolder,
+                user_agent=user_agent,
+                from_hf_hub=from_hf_hub,
+            )
+        assert model_file is not None
+
+        # try load model_file with paddle / torch / safetensor
+        state_dict = smart_load(model_file)
+
+        # convert weights
+        if from_diffusers and hasattr(cls, "smart_convert"):
+            state_dict = cls.smart_convert(state_dict, model)
+
+        loaded_state_dict_keys = list(state_dict.keys())
+
+        if paddle_dtype is not None:
+            model.to(dtype=paddle_dtype)
+
+        model, missing_keys, unexpected_keys, mismatched_keys = cls._load_pretrained_model(
+            model=model,
+            state_dict=state_dict,
+            loaded_keys=loaded_state_dict_keys,
+            ignore_mismatched_sizes=ignore_mismatched_sizes,
+            dtype=paddle_dtype,
+        )
+        loading_info = {
+            "missing_keys": missing_keys,
+            "unexpected_keys": unexpected_keys,
+            "mismatched_keys": mismatched_keys,
+            "error_msgs": "",
+        }
+        if len(unexpected_keys) > 0:
+            logger.warning(
+                f"Some weights of the model checkpoint at {pretrained_model_name_or_path} were not used when"
+                f" initializing {model.__class__.__name__}: {unexpected_keys}\n- This IS expected if you are"
+                f" initializing {model.__class__.__name__} from the checkpoint of a model trained on another task or"
+                " with another architecture (e.g. initializing a BertForSequenceClassification model from a"
+                " BertForPreTraining model).\n- This IS NOT expected if you are initializing"
+                f" {model.__class__.__name__} from the checkpoint of a model that you expect to be exactly identical"
+                " (initializing a BertForSequenceClassification model from a BertForSequenceClassification model)."
+            )
+        else:
+            logger.info(f"All model checkpoint weights were used when initializing {model.__class__.__name__}.\n")
+
+        if len(missing_keys) > 0:
+            logger.warning(
+                f"Some weights of {model.__class__.__name__} were not initialized from the model checkpoint at"
+                f" {pretrained_model_name_or_path} and are newly initialized: {missing_keys}\nYou should probably"
+                " TRAIN this model on a down-stream task to be able to use it for predictions and inference."
+            )
+        elif len(mismatched_keys) == 0:
+            logger.info(
+                f"All the weights of {model.__class__.__name__} were initialized from the model checkpoint at"
+                f" {pretrained_model_name_or_path}.\nIf your task is similar to the task the model of the checkpoint"
+                f" was trained on, you can already use {model.__class__.__name__} for predictions without further"
+                " training."
+            )
+        if len(mismatched_keys) > 0:
+            mismatched_warning = "\n".join(
+                [
+                    f"- {key}: found shape {shape1} in the checkpoint and {shape2} in the model instantiated"
+                    for key, shape1, shape2 in mismatched_keys
+                ]
+            )
+            logger.warning(
+                f"Some weights of {model.__class__.__name__} were not initialized from the model checkpoint at"
+                f" {pretrained_model_name_or_path} and are newly initialized because the shapes did not"
+                f" match:\n{mismatched_warning}\nYou should probably TRAIN this model on a down-stream task to be able"
+                " to use it for predictions and inference."
+            )
+
+        if output_loading_info:
+            return model, loading_info
+
+        return model
+
+    PretrainedModel.from_pretrained = from_pretrained_model
+    PretrainedModel.from_pretrained_v3 = from_pretrained_v3_model

@@ -1,4 +1,3 @@
-# Copyright (c) 2022 PaddlePaddle Authors. All Rights Reserved.
 # Copyright 2022 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,9 +19,9 @@ import paddle
 import paddle.nn as nn
 
 from ..configuration_utils import ConfigMixin, register_to_config
-from ..modeling_utils import ModelMixin
 from ..utils import BaseOutput
 from .embeddings import GaussianFourierProjection, TimestepEmbedding, Timesteps
+from .modeling_utils import ModelMixin
 from .unet_1d_blocks import get_down_block, get_mid_block, get_out_block, get_up_block
 
 

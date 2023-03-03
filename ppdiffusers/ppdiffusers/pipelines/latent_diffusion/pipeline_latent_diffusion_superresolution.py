@@ -21,7 +21,6 @@ import paddle
 import PIL
 
 from ...models import UNet2DModel, VQModel
-from ...pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 from ...schedulers import (
     DDIMScheduler,
     DPMSolverMultistepScheduler,
@@ -30,7 +29,8 @@ from ...schedulers import (
     LMSDiscreteScheduler,
     PNDMScheduler,
 )
-from ...utils import PIL_INTERPOLATION
+from ...utils import PIL_INTERPOLATION, deprecate, randn_tensor
+from ..pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 
 
 def preprocess(image):
@@ -48,7 +48,7 @@ class LDMSuperResolutionPipeline(DiffusionPipeline):
     A pipeline for image super-resolution using Latent
 
     This class inherits from [`DiffusionPipeline`]. Check the superclass documentation for the generic methods the
-    library implements for all the pipelines (such as downloading or saving, running on a particular xxxx, etc.)
+    library implements for all the pipelines (such as downloading or saving, running on a particular device, etc.)
 
     Parameters:
         vqvae ([`VQModel`]):
@@ -107,13 +107,15 @@ class LDMSuperResolutionPipeline(DiffusionPipeline):
                 The output format of the generate image. Choose between
                 [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
             return_dict (`bool`, *optional*):
-                Whether or not to return a [`~pipeline_utils.ImagePipelineOutput`] instead of a plain tuple.
+                Whether or not to return a [`~pipelines.ImagePipelineOutput`] instead of a plain tuple.
 
         Returns:
-            [`~pipeline_utils.ImagePipelineOutput`] or `tuple`: [`~pipelines.utils.ImagePipelineOutput`] if
-            `return_dict` is True, otherwise a `tuple. When returning a tuple, the first element is a list with the
-            generated images.
+            [`~pipelines.ImagePipelineOutput`] or `tuple`: [`~pipelines.utils.ImagePipelineOutput`] if `return_dict` is
+            True, otherwise a `tuple. When returning a tuple, the first element is a list with the generated images.
         """
+        message = "Please use `image` instead of `init_image`."
+        init_image = deprecate("init_image", "0.14.0", message, take_from=kwargs)
+        image = init_image or image
 
         if isinstance(image, PIL.Image.Image):
             batch_size = 1
@@ -129,9 +131,9 @@ class LDMSuperResolutionPipeline(DiffusionPipeline):
 
         # in_channels should be 6: 3 for latents, 3 for low resolution image
         latents_shape = (batch_size, self.unet.in_channels // 2, height, width)
-        latents_dtype = next(self.unet.named_parameters())[1].dtype
+        latents_dtype = next(self.unet.parameters()).dtype
 
-        latents = paddle.randn(latents_shape, generator=generator, dtype=latents_dtype)
+        latents = randn_tensor(latents_shape, generator=generator, dtype=latents_dtype)
 
         image = image.cast(latents_dtype)
 

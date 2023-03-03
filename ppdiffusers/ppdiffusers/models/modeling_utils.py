@@ -1,5 +1,5 @@
-# Copyright (c) 2022 PaddlePaddle Authors. All Rights Reserved.
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# coding=utf-8
+# Copyright 2022 The HuggingFace Inc. team.
 # Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,48 +15,43 @@
 # limitations under the License.
 
 import os
-import tempfile
 from functools import partial
 from typing import Callable, Optional, Union
 
 import paddle
 import paddle.nn as nn
-from huggingface_hub import (
-    create_repo,
-    get_hf_file_metadata,
-    hf_hub_download,
-    hf_hub_url,
-    repo_type_and_id_from_hf_id,
-    upload_folder,
-)
-from huggingface_hub.utils import EntryNotFoundError
-from requests import HTTPError
 
-from .download_utils import ppdiffusers_bos_download
-from .utils import (
+from .. import __version__
+from ..utils import (
     CONFIG_NAME,
-    DOWNLOAD_SERVER,
-    HF_CACHE,
+    DIFFUSERS_CACHE,
+    HF_HUB_OFFLINE,
+    PADDLE_WEIGHTS_NAME,
     PPDIFFUSERS_CACHE,
-    WEIGHTS_NAME,
+    TORCH_SAFETENSORS_WEIGHTS_NAME,
+    TORCH_WEIGHTS_NAME,
+    _add_variant,
+    _get_model_file,
+    is_safetensors_available,
+    is_torch_available,
     logging,
+    smart_load,
 )
-from .version import VERSION as __version__
+from .modeling_pytorch_paddle_utils import (
+    convert_paddle_state_dict_to_pytorch,
+    convert_pytorch_state_dict_to_paddle,
+)
 
 logger = logging.get_logger(__name__)
 
 
-def unfreeze_params(params):
-    for param in params:
-        param.stop_gradient = False
+if is_safetensors_available():
+    import safetensors
+
+if is_torch_available():
+    import torch
 
 
-def freeze_params(params):
-    for param in params:
-        param.stop_gradient = True
-
-
-# device
 def get_parameter_device(parameter: nn.Layer):
     try:
         return next(parameter.named_parameters())[1].place
@@ -64,44 +59,31 @@ def get_parameter_device(parameter: nn.Layer):
         return paddle.get_device()
 
 
-def get_parameter_dtype(parameter: nn.Layer):
-    try:
-        return next(parameter.named_parameters())[1].dtype
-    except StopIteration:
-        return paddle.get_default_dtype()
-
-
-def load_dict(checkpoint_file: Union[str, os.PathLike], map_location: str = "cpu"):
-    """
-    Reads a Paddle checkpoint file, returning properly formatted errors if they arise.
-    """
-    try:
-        if map_location == "cpu":
-            with paddle.device_scope("cpu"):
-                state_dict = paddle.load(checkpoint_file)
+def get_parameter_dtype(parameter: nn.Layer) -> paddle.dtype:
+    last_dtype = None
+    for _, t in parameter.named_parameters():
+        last_dtype = t.dtype
+        if hasattr(t, "is_floating_point"):
+            if t.is_floating_point():
+                return t.dtype
         else:
-            state_dict = paddle.load(checkpoint_file)
+            if t.dtype in [paddle.float16, paddle.float32, paddle.float64, paddle.bfloat16]:
+                return t.dtype
+    return last_dtype
+
+
+def convert_state_dict(state_dict, framework="torch"):
+    if framework in ["torch", "pt"]:
+        state_dict = {k: paddle.to_tensor(v.cpu().numpy()) for k, v in state_dict.items()}
         return state_dict
-    except Exception as e:
-        try:
-            with open(checkpoint_file) as f:
-                if f.read().startswith("version"):
-                    raise OSError(
-                        "You seem to have cloned a repository without having git-lfs installed. Please install "
-                        "git-lfs and run `git lfs install` followed by `git lfs pull` in the folder "
-                        "you cloned."
-                    )
-                else:
-                    raise ValueError(
-                        f"Unable to locate the file {checkpoint_file} which is necessary to load this pretrained "
-                        "model. Make sure you have saved the model properly."
-                    ) from e
-        except (UnicodeDecodeError, ValueError):
-            raise OSError(
-                f"Unable to load weights from Paddle checkpoint file for '{checkpoint_file}' "
-                f"at '{checkpoint_file}'. "
-                "If you tried to load a Paddle model from a TF 2.0 checkpoint, please set from_tf=True."
-            )
+    elif framework in ["numpy", "np"]:
+        state_dict = {k: v.cpu().numpy() for k, v in state_dict.items()}
+        return state_dict
+    elif framework in ["paddle", "pd"]:
+        state_dict = {k: paddle.to_tensor(v, place="cpu") for k, v in state_dict.items()}
+        return state_dict
+    else:
+        raise NotImplementedError(f"Not Implemented {framework} framework!")
 
 
 class ModelMixin(nn.Layer):
@@ -112,7 +94,7 @@ class ModelMixin(nn.Layer):
     and saving models.
 
         - **config_name** ([`str`]) -- A filename under which the model should be stored when calling
-          [`~modeling_utils.ModelMixin.save_pretrained`].
+          [`~models.ModelMixin.save_pretrained`].
     """
     config_name = CONFIG_NAME
     _automatically_saved_args = ["_ppdiffusers_version", "_class_name", "_name_or_path"]
@@ -155,15 +137,69 @@ class ModelMixin(nn.Layer):
         if self._supports_gradient_checkpointing:
             self.apply(partial(self._set_gradient_checkpointing, value=False))
 
+    def set_use_memory_efficient_attention_xformers(
+        self, valid: bool, attention_op: Optional[Callable] = None
+    ) -> None:
+        # Recursively walk through all the children.
+        # Any children which exposes the set_use_memory_efficient_attention_xformers method
+        # gets the message
+        def fn_recursive_set_mem_eff(module: nn.Layer):
+            if hasattr(module, "set_use_memory_efficient_attention_xformers"):
+                module.set_use_memory_efficient_attention_xformers(valid, attention_op)
+
+            for child in module.children():
+                fn_recursive_set_mem_eff(child)
+
+        for module in self.children():
+            if isinstance(module, nn.Layer):
+                fn_recursive_set_mem_eff(module)
+
+    def enable_xformers_memory_efficient_attention(self, attention_op: Optional[Callable] = None):
+        r"""
+        Enable memory efficient attention as implemented in xformers.
+
+        When this option is enabled, you should observe lower GPU memory usage and a potential speed up at inference
+        time. Speed up at training time is not guaranteed.
+
+        Warning: When Memory Efficient Attention and Sliced attention are both enabled, the Memory Efficient Attention
+        is used.
+
+        Parameters:
+            attention_op (`Callable`, *optional*):
+                Override the default `None`
+
+        Examples:
+
+        ```py
+        >>> import paddle
+        >>> from ppdiffusers import UNet2DConditionModel
+
+        >>> model = UNet2DConditionModel.from_pretrained(
+        ...     "stabilityai/stable-diffusion-2-1", subfolder="unet", paddle_dtype=paddle.float16
+        ... )
+        >>> model.enable_xformers_memory_efficient_attention()
+        ```
+        """
+        self.set_use_memory_efficient_attention_xformers(True, attention_op)
+
+    def disable_xformers_memory_efficient_attention(self):
+        r"""
+        Disable memory efficient attention as implemented in xformers.
+        """
+        self.set_use_memory_efficient_attention_xformers(False)
+
     def save_pretrained(
         self,
         save_directory: Union[str, os.PathLike],
         is_main_process: bool = True,
-        save_function: Callable = paddle.save,
+        save_function: Callable = None,
+        safe_serialization: bool = True,
+        variant: Optional[str] = None,
+        to_diffusers: Optional[bool] = False,
     ):
         """
         Save a model and its configuration file to a directory, so that it can be re-loaded using the
-        `[`~modeling_utils.ModelMixin.from_pretrained`]` class method.
+        `[`~models.ModelMixin.from_pretrained`]` class method.
 
         Arguments:
             save_directory (`str` or `os.PathLike`):
@@ -174,8 +210,18 @@ class ModelMixin(nn.Layer):
                 the main process to avoid race conditions.
             save_function (`Callable`):
                 The function to use to save the state dictionary. Useful on distributed training like TPUs when one
-                need to replace `paddle.save` by another method.
+                need to replace `torch.save` by another method. Can be configured with the environment variable
+                `DIFFUSERS_SAVE_MODE`.
+            variant (`str`, *optional*):
+                If specified, weights are saved in the format pytorch_model.<variant>.bin.
+            to_diffusers (`bool`, *optional*, defaults to `False`):
+                If specified, weights are saved in the format of torch. eg. linear need transpose.
+            safe_serialization (`bool`, *optional*, defaults to `True`):
+                Only when `to_diffusers` is True, Whether to save the model using `safetensors` or the traditional PyTorch way (that uses `pickle`).
         """
+        if to_diffusers and safe_serialization and not is_safetensors_available():
+            raise ImportError("`safe_serialization` requires the `safetensors library: `pip install safetensors`.")
+
         if os.path.isfile(save_directory):
             logger.error(f"Provided path ({save_directory}) should be a directory, not a file")
             return
@@ -192,85 +238,38 @@ class ModelMixin(nn.Layer):
         # Save the model
         state_dict = model_to_save.state_dict()
 
-        # Clean the folder from a previous save
-        for filename in os.listdir(save_directory):
-            full_filename = os.path.join(save_directory, filename)
-            # If we have a shard file that is not going to be replaced, we delete it, but only from the main process
-            # in distributed settings to avoid race conditions.
-            if filename.startswith(WEIGHTS_NAME[:-4]) and os.path.isfile(full_filename) and is_main_process:
-                os.remove(full_filename)
+        # choose save_function
+        if save_function is None:
+            if to_diffusers:
+                if safe_serialization:
+                    if is_torch_available():
+                        save_function = safetensors.torch.save_file
+                        state_dict = convert_state_dict(state_dict, framework="torch")
+                    else:
+                        save_function = safetensors.numpy.save_file
+                        state_dict = convert_state_dict(state_dict, framework="numpy")
+                    weights_name = _add_variant(TORCH_SAFETENSORS_WEIGHTS_NAME, variant)
+                else:
+                    if not is_torch_available():
+                        raise ImportError("`to_diffusers` requires the `torch library: `pip install torch`.")
+                    save_function = torch.save
+                    weights_name = _add_variant(TORCH_WEIGHTS_NAME, variant)
+                    state_dict = convert_state_dict(state_dict, framework="torch")
+
+                state_dict = convert_paddle_state_dict_to_pytorch(state_dict, model_to_save)
+            else:
+                save_function = paddle.save
+                weights_name = _add_variant(PADDLE_WEIGHTS_NAME, variant)
 
         # Save the model
-        save_function(state_dict, os.path.join(save_directory, WEIGHTS_NAME))
+        save_function(state_dict, os.path.join(save_directory, weights_name))
 
-        logger.info(f"Model weights saved in {os.path.join(save_directory, WEIGHTS_NAME)}")
-
-    def save_to_hf_hub(
-        self,
-        repo_id: str,
-        private: Optional[bool] = None,
-        subfolder: Optional[str] = None,
-        commit_message: Optional[str] = None,
-        revision: Optional[str] = None,
-        create_pr: bool = False,
-    ):
-        """
-        Uploads all elements of this model to a new HuggingFace Hub repository.
-        Args:
-            repo_id (str): Repository name for your model/tokenizer in the Hub.
-            private (bool, optional): Whether the model/tokenizer is set to private
-            subfolder (str, optional): Push to a subfolder of the repo instead of the root
-            commit_message (str, optional) — The summary / title / first line of the generated commit. Defaults to: f"Upload {path_in_repo} with huggingface_hub"
-            revision (str, optional) — The git revision to commit from. Defaults to the head of the "main" branch.
-            create_pr (boolean, optional) — Whether or not to create a Pull Request with that commit. Defaults to False.
-                If revision is not set, PR is opened against the "main" branch. If revision is set and is a branch, PR is opened against this branch.
-                If revision is set and is not a branch name (example: a commit oid), an RevisionNotFoundError is returned by the server.
-
-        Returns: The url of the commit of your model in the given repository.
-        """
-        repo_url = create_repo(repo_id, private=private, exist_ok=True)
-
-        # Infer complete repo_id from repo_url
-        # Can be different from the input `repo_id` if repo_owner was implicit
-        _, repo_owner, repo_name = repo_type_and_id_from_hf_id(repo_url)
-
-        repo_id = f"{repo_owner}/{repo_name}"
-
-        # Check if README file already exist in repo
-        try:
-            get_hf_file_metadata(hf_hub_url(repo_id=repo_id, filename="README.md", revision=revision))
-            has_readme = True
-        except EntryNotFoundError:
-            has_readme = False
-
-        with tempfile.TemporaryDirectory() as root_dir:
-            if subfolder is not None:
-                save_dir = os.path.join(root_dir, subfolder)
-            else:
-                save_dir = root_dir
-            # save model
-            self.save_pretrained(save_dir)
-            # Add readme if does not exist
-            logger.info("README.md not found, adding the default README.md")
-            if not has_readme:
-                with open(os.path.join(root_dir, "README.md"), "w") as f:
-                    f.write(f"---\nlibrary_name: ppdiffusers\n---\n# {repo_id}")
-
-            # Upload model and return
-            logger.info(f"Pushing to the {repo_id}. This might take a while")
-            return upload_folder(
-                repo_id=repo_id,
-                repo_type="model",
-                folder_path=root_dir,
-                commit_message=commit_message,
-                revision=revision,
-                create_pr=create_pr,
-            )
+        logger.info(f"Model weights saved in {os.path.join(save_directory, weights_name)}")
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path: Optional[Union[str, os.PathLike]], **kwargs):
         r"""
-        Instantiate a pretrained paddle model from a pre-trained model configuration.
+        Instantiate a pretrained pytorch model from a pre-trained model configuration.
 
         The model is set in evaluation mode by default using `model.eval()` (Dropout modules are deactivated). To train
         the model, you should first set it back in training mode with `model.train()`.
@@ -297,71 +296,170 @@ class ModelMixin(nn.Layer):
             paddle_dtype (`str` or `paddle.dtype`, *optional*):
                 Override the default `paddle.dtype` and load the model under this dtype. If `"auto"` is passed the dtype
                 will be automatically derived from the model's weights.
+            force_download (`bool`, *optional*, defaults to `False`):
+                Whether or not to force the (re-)download of the model weights and configuration files, overriding the
+                cached versions if they exist.
+            resume_download (`bool`, *optional*, defaults to `False`):
+                Whether or not to delete incompletely received files. Will attempt to resume the download if such a
+                file exists.
+            proxies (`Dict[str, str]`, *optional*):
+                A dictionary of proxy servers to use by protocol or endpoint, e.g., `{'http': 'foo.bar:3128',
+                'http://hostname': 'foo.bar:4012'}`. The proxies are used on each request.
             output_loading_info(`bool`, *optional*, defaults to `False`):
                 Whether or not to also return a dictionary containing missing keys, unexpected keys and error messages.
+            local_files_only(`bool`, *optional*, defaults to `False`):
+                Whether or not to only look at local files (i.e., do not try to download the model).
+            use_auth_token (`str` or *bool*, *optional*):
+                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
+                when running `diffusers-cli login` (stored in `~/.huggingface`).
+            revision (`str`, *optional*, defaults to `"main"`):
+                The specific model version to use. It can be a branch name, a tag name, or a commit id, since we use a
+                git-based system for storing models and other artifacts on huggingface.co, so `revision` can be any
+                identifier allowed by git.
+            from_diffusers (`bool`, *optional*, defaults to `False`):
+                Load the model weights from a torch checkpoint save file.
             subfolder (`str`, *optional*, defaults to `""`):
                 In case the relevant files are located inside a subfolder of the model repo (either remote in
                 huggingface.co or downloaded locally), you can specify the folder name here.
-            from_hf_hub (bool, *optional*):
-                Whether to load from Hugging Face Hub. Defaults to False
+
+            mirror (`str`, *optional*):
+                Mirror source to accelerate downloads in China. If you are from China and have an accessibility
+                problem, you can set this option to resolve it. Note that we do not guarantee the timeliness or safety.
+                Please refer to the mirror site for more information.
+            variant (`str`, *optional*):
+                If specified load weights from `variant` filename, *e.g.* pytorch_model.<variant>.bin.
+                model_state.<variant>.pdparams.
+
+        <Tip>
+
+         It is required to be logged in (`huggingface-cli login`) when you want to use private or [gated
+         models](https://huggingface.co/docs/hub/models-gated#gated-models).
+
+        </Tip>
+
         """
         from_hf_hub = kwargs.pop("from_hf_hub", False)
-        if from_hf_hub:
-            cache_dir = kwargs.pop("cache_dir", HF_CACHE)
-        else:
-            cache_dir = kwargs.pop("cache_dir", PPDIFFUSERS_CACHE)
+        cache_dir = (
+            kwargs.pop("cache_dir", DIFFUSERS_CACHE) if from_hf_hub else kwargs.pop("cache_dir", PPDIFFUSERS_CACHE)
+        )
         ignore_mismatched_sizes = kwargs.pop("ignore_mismatched_sizes", False)
+        force_download = kwargs.pop("force_download", False)
+        from_diffusers = kwargs.pop("from_diffusers", False)
+        resume_download = kwargs.pop("resume_download", False)
+        proxies = kwargs.pop("proxies", None)
         output_loading_info = kwargs.pop("output_loading_info", False)
+        local_files_only = kwargs.pop("local_files_only", HF_HUB_OFFLINE)
+        use_auth_token = kwargs.pop("use_auth_token", None)
+        revision = kwargs.pop("revision", None)
         paddle_dtype = kwargs.pop("paddle_dtype", None)
         subfolder = kwargs.pop("subfolder", None)
-        ignore_keys = kwargs.pop("ignore_keys", [])
+        ignore_keys = kwargs.pop("ignore_keys", None)
+        variant = kwargs.pop("variant", None)
+
+        user_agent = {
+            "ppdiffusers": __version__,
+            "file_type": "model",
+            "framework": "paddle",
+        }
 
         # Load config if we don't provide a configuration
         config_path = pretrained_model_name_or_path
-
-        model_file = None
-        if model_file is None:
-            model_file = _get_model_file(
-                pretrained_model_name_or_path,
-                weights_name=WEIGHTS_NAME,
-                cache_dir=cache_dir,
-                subfolder=subfolder,
-                from_hf_hub=from_hf_hub,
-            )
-
         config, unused_kwargs = cls.load_config(
             config_path,
             cache_dir=cache_dir,
             return_unused_kwargs=True,
+            force_download=force_download,
+            resume_download=resume_download,
+            proxies=proxies,
+            local_files_only=local_files_only,
+            use_auth_token=use_auth_token,
+            revision=revision,
             subfolder=subfolder,
-            from_hf_hub=from_hf_hub,
             **kwargs,
         )
         model = cls.from_config(config, **unused_kwargs)
 
-        state_dict = load_dict(model_file, map_location="cpu")
-
-        keys = list(state_dict.keys())
-        for k in keys:
-            for ik in ignore_keys:
-                if k.startswith(ik):
-                    logger.warning("Deleting key {} from state_dict.".format(k))
-                    del state_dict[k]
-
-        dtype = set(v.dtype for v in state_dict.values())
-
-        if len(dtype) > 1 and paddle.float32 not in dtype:
-            raise ValueError(
-                f"The weights of the model file {model_file} have a mixture of incompatible dtypes {dtype}. Please"
-                f" make sure that {model_file} weights have only one dtype."
-            )
-        elif len(dtype) > 1 and paddle.float32 in dtype:
-            dtype = paddle.float32
+        # This variable will flag if we're loading a sharded checkpoint. In this case the archive file is just the
+        # Load model
+        model_file = None
+        if from_diffusers:
+            if is_safetensors_available():
+                try:
+                    model_file = _get_model_file(
+                        pretrained_model_name_or_path,
+                        weights_name=_add_variant(TORCH_SAFETENSORS_WEIGHTS_NAME, variant),
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        resume_download=resume_download,
+                        proxies=proxies,
+                        local_files_only=local_files_only,
+                        use_auth_token=use_auth_token,
+                        revision=revision,
+                        subfolder=subfolder,
+                        user_agent=user_agent,
+                        from_hf_hub=from_hf_hub,
+                    )
+                except Exception:  # noqa: E722
+                    pass
+            if model_file is None:
+                model_file = _get_model_file(
+                    pretrained_model_name_or_path,
+                    weights_name=_add_variant(TORCH_WEIGHTS_NAME, variant),
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    resume_download=resume_download,
+                    proxies=proxies,
+                    local_files_only=local_files_only,
+                    use_auth_token=use_auth_token,
+                    revision=revision,
+                    subfolder=subfolder,
+                    user_agent=user_agent,
+                    from_hf_hub=from_hf_hub,
+                )
         else:
-            dtype = dtype.pop()
+            model_file = _get_model_file(
+                pretrained_model_name_or_path,
+                weights_name=_add_variant(PADDLE_WEIGHTS_NAME, variant),
+                cache_dir=cache_dir,
+                force_download=force_download,
+                resume_download=resume_download,
+                proxies=proxies,
+                local_files_only=local_files_only,
+                use_auth_token=use_auth_token,
+                revision=revision,
+                subfolder=subfolder,
+                user_agent=user_agent,
+                from_hf_hub=from_hf_hub,
+            )
+        assert model_file is not None
 
-        # move model to correct dtype
-        model = model.to(dtype=dtype)
+        # try load model_file with paddle / torch / safetensor
+        state_dict = smart_load(model_file)
+
+        # convert weights
+        if from_diffusers:
+            state_dict = convert_pytorch_state_dict_to_paddle(state_dict, model)
+
+        # remove keys
+        if ignore_keys is not None:
+            keys = list(state_dict.keys())
+            for k in keys:
+                for ik in ignore_keys:
+                    if k.startswith(ik):
+                        logger.warning("Deleting key {} from state_dict.".format(k))
+                        del state_dict[k]
+
+        # dtype = set(v.dtype for v in state_dict.values())
+        # if len(dtype) > 1 and paddle.float32 not in dtype:
+        #     raise ValueError(
+        #         f"The weights of the model file {model_file} have a mixture of incompatible dtypes {dtype}. Please"
+        #         f" make sure that {model_file} weights have only one dtype."
+        #     )
+        # elif len(dtype) > 1 and paddle.float32 in dtype:
+        #     dtype = paddle.float32
+        # else:
+        #     dtype = dtype.pop()
+        # model = model.to(dtype=dtype)
 
         model, missing_keys, unexpected_keys, mismatched_keys, error_msgs = cls._load_pretrained_model(
             model,
@@ -554,66 +652,3 @@ def unwrap_model(model: nn.Layer) -> nn.Layer:
         return unwrap_model(model._layers)
     else:
         return model
-
-
-def _get_model_file(
-    pretrained_model_name_or_path,
-    *,
-    weights_name,
-    subfolder,
-    cache_dir,
-    from_hf_hub,
-):
-    pretrained_model_name_or_path = str(pretrained_model_name_or_path)
-    if os.path.isdir(pretrained_model_name_or_path):
-        if os.path.isfile(os.path.join(pretrained_model_name_or_path, weights_name)):
-            # Load from a PyTorch checkpoint
-            model_file = os.path.join(pretrained_model_name_or_path, weights_name)
-        elif subfolder is not None and os.path.isfile(
-            os.path.join(pretrained_model_name_or_path, subfolder, weights_name)
-        ):
-            model_file = os.path.join(pretrained_model_name_or_path, subfolder, weights_name)
-        else:
-            raise EnvironmentError(
-                f"Error no file named {weights_name} found in directory {pretrained_model_name_or_path}."
-            )
-        return model_file
-    elif from_hf_hub:
-        model_file = hf_hub_download(
-            repo_id=pretrained_model_name_or_path,
-            filename=weights_name,
-            cache_dir=cache_dir,
-            subfolder=subfolder,
-            library_name="PPDiffusers",
-            library_version=__version__,
-        )
-        return model_file
-    else:
-        try:
-            # Load from URL or cache if already cached
-            model_file = ppdiffusers_bos_download(
-                pretrained_model_name_or_path,
-                filename=weights_name,
-                subfolder=subfolder,
-                cache_dir=cache_dir,
-            )
-        except HTTPError as err:
-            raise EnvironmentError(
-                "There was a specific connection error when trying to load" f" {pretrained_model_name_or_path}:\n{err}"
-            )
-        except ValueError:
-            raise EnvironmentError(
-                f"We couldn't connect to '{DOWNLOAD_SERVER}' to load this model, couldn't find it"
-                f" in the cached files and it looks like {pretrained_model_name_or_path} is not the path to a"
-                f" directory containing a file named {weights_name} or"
-                " \nCheckout your internet connection or see how to run the library in"
-                " offline mode at 'https://huggingface.co/docs/diffusers/installation#offline-mode'."
-            )
-        except EnvironmentError:
-            raise EnvironmentError(
-                f"Can't load the model for '{pretrained_model_name_or_path}'. If you were trying to load it from "
-                "'https://huggingface.co/models', make sure you don't have a local directory with the same name. "
-                f"Otherwise, make sure '{pretrained_model_name_or_path}' is the correct path to a directory "
-                f"containing a file named {weights_name}"
-            )
-        return model_file

@@ -1,4 +1,3 @@
-# Copyright (c) 2022 PaddlePaddle Authors. All Rights Reserved.
 # Copyright 2022 Zhejiang University Team and The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,8 +36,6 @@ class IPNDMScheduler(SchedulerMixin, ConfigMixin):
 
     Args:
         num_train_timesteps (`int`): number of diffusion steps used to train the model.
-        trained_betas (`np.ndarray`, optional):
-            option to pass an array of betas directly to the constructor to bypass `beta_start`, `beta_end` etc.
     """
 
     order = 1
@@ -74,7 +71,7 @@ class IPNDMScheduler(SchedulerMixin, ConfigMixin):
         steps = paddle.concat([steps, paddle.to_tensor([0.0])])
 
         if self.config.trained_betas is not None:
-            self.betas = paddle.to_tensor(self.config.trained_betas, dtype="float32")
+            self.betas = paddle.to_tensor(self.config.trained_betas, dtype=paddle.float32)
         else:
             self.betas = paddle.sin(steps * math.pi / 2) ** 2
 

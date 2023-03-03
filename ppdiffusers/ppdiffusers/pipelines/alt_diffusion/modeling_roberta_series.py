@@ -45,6 +45,7 @@ def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_l
 class TransformationModelOutput(ModelOutput):
     """
     Base class for text model's outputs that also contains a pooling of the last hidden states.
+
     Args:
         text_embeds (`paddle.Tensor` of shape `(batch_size, output_dim)` *optional* returned when model is initialized with `with_projection=True`):
             The text embeddings obtained by applying the projection layer to the pooler_output.
@@ -53,10 +54,12 @@ class TransformationModelOutput(ModelOutput):
         hidden_states (`tuple(paddle.Tensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
             Tuple of `paddle.Tensor` (one for the output of the embeddings, if the model has an embedding layer, +
             one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+
             Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
         attentions (`tuple(paddle.Tensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
             Tuple of `paddle.Tensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
             sequence_length)`.
+
             Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
             heads.
     """
@@ -94,7 +97,7 @@ class RobertaSeriesModelWithTransformation(RobertaPretrainedModel):
     base_model_prefix = "roberta"
     config_class = RobertaSeriesConfig
 
-    def __init__(self, config: RobertaSeriesConfig):
+    def __init__(self, config):
         super().__init__(config)
         self.roberta = XLMRobertaModel(config)
         self.transformation = nn.Linear(config.hidden_size, config.project_dim)
