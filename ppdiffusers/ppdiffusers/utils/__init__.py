@@ -97,7 +97,7 @@ if is_paddle_available():
         paddle_device,
         parse_flag_from_env,
         print_tensor_test,
-        require_torch_gpu,
+        require_paddle_gpu,
         slow,
     )
 

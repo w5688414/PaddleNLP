@@ -173,7 +173,7 @@ def require_paddle(test_case):
     return unittest.skipUnless(is_paddle_available(), "test requires Paddle")(test_case)
 
 
-def require_torch_gpu(test_case):
+def require_paddle_gpu(test_case):
     """Decorator marking a test that requires CUDA and Paddle."""
     return unittest.skipUnless(is_paddle_available() and paddle_device == "gpu", "test requires Paddle+CUDA")(
         test_case
