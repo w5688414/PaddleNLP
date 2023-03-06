@@ -101,9 +101,10 @@ class CrossAttention(nn.Layer):
         # We use the AttnProcessor2_5 by default when paddle 2.5 is used which uses
         # paddle.incubate.nn.functional.cutlass_fused_multi_head_attention for native Flash/memory_efficient_attention
         if processor is None:
-            processor = (
-                AttnProcessor2_5() if is_cutlass_fused_multi_head_attention_available() else CrossAttnProcessor()
-            )
+            processor = CrossAttnProcessor()
+            # processor = (
+            #     AttnProcessor2_5() if is_cutlass_fused_multi_head_attention_available() else CrossAttnProcessor()
+            # )
         self.set_processor(processor)
 
     def set_use_memory_efficient_attention_xformers(
@@ -196,14 +197,16 @@ class CrossAttention(nn.Layer):
             **cross_attention_kwargs,
         )
 
-    def batch_to_head_dim(self, tensor):
-        tensor = tensor.transpose([0, 2, 1, 3])
+    def batch_to_head_dim(self, tensor, transpose=True):
+        if transpose:
+            tensor = tensor.transpose([0, 2, 1, 3])
         tensor = tensor.reshape([0, 0, tensor.shape[2] * tensor.shape[3]])
         return tensor
 
-    def head_to_batch_dim(self, tensor):
+    def head_to_batch_dim(self, tensor, transpose=True):
         tensor = tensor.reshape([0, 0, self.heads, self.head_dim])
-        tensor = tensor.transpose([0, 2, 1, 3])
+        if transpose:
+            tensor = tensor.transpose([0, 2, 1, 3])
         return tensor
 
     def get_attention_scores(self, query, key, attention_mask=None):
@@ -420,13 +423,14 @@ class XFormersCrossAttnProcessor:
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
 
-        query = attn.head_to_batch_dim(query)
-        key = attn.head_to_batch_dim(key)
-        value = attn.head_to_batch_dim(value)
+        # if transpose = False, query's shape will be [batch_size, seq_len, num_head, head_dim]
+        query = attn.head_to_batch_dim(query, transpose=False)
+        key = attn.head_to_batch_dim(key, transpose=False)
+        value = attn.head_to_batch_dim(value, transpose=False)
 
         hidden_states = cutlass_fused_multi_head_attention(query, key, value, attention_mask, attn.scale)
-        hidden_states = hidden_states.cast(query.dtype)
-        hidden_states = attn.batch_to_head_dim(hidden_states)
+        # hidden_states = hidden_states.cast(query.dtype)
+        hidden_states = attn.batch_to_head_dim(hidden_states, transpose=False)
 
         # linear proj
         hidden_states = attn.to_out[0](hidden_states)
@@ -456,18 +460,18 @@ class LoRAXFormersCrossAttnProcessor(nn.Layer):
         attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
 
         query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
-        query = attn.head_to_batch_dim(query)
+        query = attn.head_to_batch_dim(query, transpose=False)
 
         encoder_hidden_states = encoder_hidden_states if encoder_hidden_states is not None else hidden_states
 
         key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states) + scale * self.to_v_lora(encoder_hidden_states)
 
-        key = attn.head_to_batch_dim(key)
-        value = attn.head_to_batch_dim(value)
+        key = attn.head_to_batch_dim(key, transpose=False)
+        value = attn.head_to_batch_dim(value, transpose=False)
 
         hidden_states = cutlass_fused_multi_head_attention(query, key, value, attention_mask, attn.scale)
-        hidden_states = attn.batch_to_head_dim(hidden_states)
+        hidden_states = attn.batch_to_head_dim(hidden_states, transpose=False)
 
         # linear proj
         hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)

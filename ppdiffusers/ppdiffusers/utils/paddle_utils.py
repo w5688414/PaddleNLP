@@ -70,89 +70,97 @@ if is_paddle_available():
 
     paddle.Generator = get_rng_state_tracker
 
+    randn = paddle.randn
+    rand = paddle.rand
+    randint = paddle.randint
 
-def randn_tensor(
-    shape: Union[Tuple, List],
-    generator: Optional[Union[List["paddle.Generator"], "paddle.Generator"]] = None,
-    dtype: Optional["paddle.dtype"] = None,
-    *kwargs,
-):
-    """This is a helper function that allows to create random tensors on the desired `device` with the desired `dtype`. When
-    passing a list of generators one can seed each batched size individually. If CPU generators are passed the tensor
-    will always be created on CPU.
-    """
-    # device on which tensor is created defaults to device
-    batch_size = shape[0]
-    generator_context = contextlib.nullcontext() if generator is None else get_rng_state_tracker().rng_state(generator)
-
-    with generator_context:
-        if isinstance(generator, (list, tuple)):
-            shape = (1,) + tuple(shape[1:])
-            latents = [paddle.randn(shape, generator=generator[i], dtype=dtype) for i in range(batch_size)]
-            latents = paddle.concat(latents, axis=0)
-        else:
-            latents = paddle.randn(shape, dtype=dtype)
-
-    return latents
-
-
-def rand_tensor(
-    shape: Union[Tuple, List],
-    generator: Optional[Union[List["paddle.Generator"], "paddle.Generator"]] = None,
-    dtype: Optional["paddle.dtype"] = None,
-    *kwargs,
-):
-    """This is a helper function that allows to create random tensors on the desired `device` with the desired `dtype`. When
-    passing a list of generators one can seed each batched size individually. If CPU generators are passed the tensor
-    will always be created on CPU.
-    """
-    # device on which tensor is created defaults to device
-    batch_size = shape[0]
-    generator_context = contextlib.nullcontext() if generator is None else get_rng_state_tracker().rng_state(generator)
-
-    with generator_context:
-        if isinstance(generator, (list, tuple)):
-            shape = (1,) + tuple(shape[1:])
-            latents = [paddle.rand(shape, generator=generator[i], dtype=dtype) for i in range(batch_size)]
-            latents = paddle.concat(latents, axis=0)
-        else:
-            latents = paddle.rand(shape, dtype=dtype)
-
-    return latents
-
-
-def randint_tensor(
-    low=0,
-    high=None,
-    shape: Union[Tuple, List] = [1],
-    generator: Optional["paddle.Generator"] = None,
-    dtype: Optional["paddle.dtype"] = None,
-    *kwargs,
-):
-    """This is a helper function that allows to create random tensors on the desired `device` with the desired `dtype`. When
-    passing a list of generators one can seed each batched size individually. If CPU generators are passed the tensor
-    will always be created on CPU.
-    """
-    # device on which tensor is created defaults to device
-    generator_context = contextlib.nullcontext() if generator is None else get_rng_state_tracker().rng_state(generator)
-
-    with generator_context:
-        latents = paddle.randint(low=low, high=high, shape=shape, dtype=dtype)
-
-    return latents
-
-
-# dumpy patch! TODO junnyu!
-randn = paddle.randn
-
-
-def randn_pt(shape, dtype=None, name=None, **kwargs):
-    generator = kwargs.get("generator", None)
-    if generator is None:
-        return randn(shape, dtype=dtype, name=name)
-    else:
-        with get_rng_state_tracker().rng_state(generator):
+    def randn_pt(shape, dtype=None, name=None, **kwargs):
+        generator = kwargs.get("generator", None)
+        if generator is None:
             return randn(shape, dtype=dtype, name=name)
+        else:
+            with get_rng_state_tracker().rng_state(generator):
+                return randn(shape, dtype=dtype, name=name)
 
+    def rand_pt(shape, dtype=None, name=None, **kwargs):
+        generator = kwargs.get("generator", None)
+        if generator is None:
+            return rand(shape, dtype=dtype, name=name)
+        else:
+            with get_rng_state_tracker().rng_state(generator):
+                return rand(shape, dtype=dtype, name=name)
 
-paddle.randn = randn_pt
+    def randint_pt(low=0, high=None, shape=[1], dtype=None, name=None, **kwargs):
+        generator = kwargs.get("generator", None)
+        if generator is None:
+            return randint(low=low, high=high, shape=shape, dtype=dtype, name=name)
+        else:
+            with get_rng_state_tracker().rng_state(generator):
+                return randint(low=low, high=high, shape=shape, dtype=dtype, name=name)
+
+    def randn_like_pt(x, dtype=None, name=None, **kwargs):
+        generator = kwargs.get("generator", None)
+        if dtype is None:
+            dtype = x.dtype
+        return randn_pt(x.shape, dtype=dtype, generator=generator, name=name, **kwargs)
+
+    paddle.randn = randn_pt
+    paddle.rand = rand_pt
+    paddle.randint = randint_pt
+    paddle.randn_like = randn_like_pt
+
+    def randn_tensor(
+        shape: Union[Tuple, List],
+        generator: Optional[Union[List["paddle.Generator"], "paddle.Generator"]] = None,
+        dtype: Optional["paddle.dtype"] = None,
+        *kwargs,
+    ):
+        """This is a helper function that allows to create random tensors on the desired `device` with the desired `dtype`. When
+        passing a list of generators one can seed each batched size individually. If CPU generators are passed the tensor
+        will always be created on CPU.
+        """
+        if isinstance(generator, (list, tuple)):
+            batch_size = shape[0]
+            shape = (1,) + tuple(shape[1:])
+            latents = [randn_pt(shape, generator=generator[i], dtype=dtype) for i in range(batch_size)]
+            latents = paddle.concat(latents, axis=0)
+        else:
+            latents = randn_pt(shape, generator=generator, dtype=dtype)
+
+        return latents
+
+    def rand_tensor(
+        shape: Union[Tuple, List],
+        generator: Optional[Union[List["paddle.Generator"], "paddle.Generator"]] = None,
+        dtype: Optional["paddle.dtype"] = None,
+        *kwargs,
+    ):
+        """This is a helper function that allows to create random tensors on the desired `device` with the desired `dtype`. When
+        passing a list of generators one can seed each batched size individually. If CPU generators are passed the tensor
+        will always be created on CPU.
+        """
+        if isinstance(generator, (list, tuple)):
+            batch_size = shape[0]
+            shape = (1,) + tuple(shape[1:])
+            latents = [rand_pt(shape, generator=generator[i], dtype=dtype) for i in range(batch_size)]
+            latents = paddle.concat(latents, axis=0)
+        else:
+            latents = rand_pt(shape, generator=generator, dtype=dtype)
+
+        return latents
+
+    def randint_tensor(
+        low=0,
+        high=None,
+        shape: Union[Tuple, List] = [1],
+        generator: Optional["paddle.Generator"] = None,
+        dtype: Optional["paddle.dtype"] = None,
+        *kwargs,
+    ):
+        """This is a helper function that allows to create random tensors on the desired `device` with the desired `dtype`. When
+        passing a list of generators one can seed each batched size individually. If CPU generators are passed the tensor
+        will always be created on CPU.
+        """
+        latents = randint_pt(low=low, high=high, shape=shape, dtype=dtype, generator=generator)
+
+        return latents

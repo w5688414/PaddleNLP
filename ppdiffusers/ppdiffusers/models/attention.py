@@ -76,13 +76,15 @@ class AttentionBlock(nn.Layer):
         self._use_memory_efficient_attention_xformers = False
         self._attention_op = None
 
-    def reshape_heads_to_batch_dim(self, tensor):
+    def reshape_heads_to_batch_dim(self, tensor, transpose=True):
         tensor = tensor.reshape([0, 0, self.num_heads, self.num_head_size])
-        tensor = tensor.transpose([0, 2, 1, 3])
+        if transpose:
+            tensor = tensor.transpose([0, 2, 1, 3])
         return tensor
 
-    def reshape_batch_dim_to_heads(self, tensor):
-        tensor = tensor.transpose([0, 2, 1, 3])
+    def reshape_batch_dim_to_heads(self, tensor, transpose=True):
+        if transpose:
+            tensor = tensor.transpose([0, 2, 1, 3])
         tensor = tensor.reshape([0, 0, tensor.shape[2] * tensor.shape[3]])
         return tensor
 
@@ -121,9 +123,9 @@ class AttentionBlock(nn.Layer):
         key_proj = self.key(hidden_states)
         value_proj = self.value(hidden_states)
 
-        query_proj = self.reshape_heads_to_batch_dim(query_proj)
-        key_proj = self.reshape_heads_to_batch_dim(key_proj)
-        value_proj = self.reshape_heads_to_batch_dim(value_proj)
+        query_proj = self.reshape_heads_to_batch_dim(query_proj, transpose=False)
+        key_proj = self.reshape_heads_to_batch_dim(key_proj, transpose=False)
+        value_proj = self.reshape_heads_to_batch_dim(value_proj, transpose=False)
 
         if self._use_memory_efficient_attention_xformers:
             # Memory efficient attention
@@ -135,7 +137,7 @@ class AttentionBlock(nn.Layer):
             hidden_states = paddle.matmul(attention_probs, value_proj)
 
         # reshape hidden_states
-        hidden_states = self.reshape_batch_dim_to_heads(hidden_states)
+        hidden_states = self.reshape_batch_dim_to_heads(hidden_states, transpose=False)
 
         # compute next hidden_states
         hidden_states = self.proj_attn(hidden_states)

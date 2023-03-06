@@ -449,8 +449,9 @@ class ConfigMixin:
         if "_diffusers_version" in data and "_ppdiffusers_version" not in data:
             data["_ppdiffusers_version"] = data["_diffusers_version"]
         if "_diffusers_version" not in data and "_ppdiffusers_version" not in data:
-            data["_ppdiffusers_version"] = __version__
             data["_diffusers_version"] = __version__
+            data["_ppdiffusers_version"] = __version__
+
         return data
 
     def __repr__(self):
@@ -477,6 +478,7 @@ class ConfigMixin:
         config_dict["_class_name"] = self.__class__.__name__
         # TODO junnyu, support diffusers and ppdiffusers
         config_dict["_diffusers_version"] = __version__
+        config_dict["_ppdiffusers_version"] = __version__
 
         config_dict["_ppdiffusers_version"] = __version__
 

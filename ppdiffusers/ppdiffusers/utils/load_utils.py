@@ -219,7 +219,16 @@ def convert_to_paddle(state_dict, return_numpy=False):
         if v.ndim == 0:
             v = v.reshape((1,))
         if not return_numpy:
-            pd_state_dict[k] = paddle.to_tensor(v.numpy()) if hasattr(v, "numpy") else paddle.to_tensor(v)
+            # support bfloat16
+            if "torch.bfloat16" in str(v.dtype):
+                v = v.float()
+                pd_state_dict[k] = (
+                    paddle.to_tensor(v.numpy()).cast(paddle.bfloat16)
+                    if hasattr(v, "numpy")
+                    else paddle.to_tensor(v).cast(paddle.bfloat16)
+                )
+            else:
+                pd_state_dict[k] = paddle.to_tensor(v.numpy()) if hasattr(v, "numpy") else paddle.to_tensor(v)
         else:
             pd_state_dict[k] = v.numpy() if hasattr(v, "numpy") else v
 
