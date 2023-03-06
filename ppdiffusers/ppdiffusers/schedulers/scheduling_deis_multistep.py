@@ -302,7 +302,7 @@ class DEISMultistepScheduler(SchedulerMixin, ConfigMixin):
 
             def ind_fn(t, b, c):
                 # Integrate[(log(t) - log(c)) / (log(b) - log(c)), {t}]
-                return t * (-np.log(c) + np.log(t) - 1) / (np.log(b) - np.log(c))
+                return t * (-paddle.log(c) + paddle.log(t) - 1) / (paddle.log(b) - paddle.log(c))
 
             coef1 = ind_fn(rho_t, rho_s0, rho_s1) - ind_fn(rho_s0, rho_s0, rho_s1)
             coef2 = ind_fn(rho_t, rho_s1, rho_s0) - ind_fn(rho_s0, rho_s1, rho_s0)
@@ -349,14 +349,14 @@ class DEISMultistepScheduler(SchedulerMixin, ConfigMixin):
             def ind_fn(t, b, c, d):
                 # Integrate[(log(t) - log(c))(log(t) - log(d)) / (log(b) - log(c))(log(b) - log(d)), {t}]
                 numerator = t * (
-                    np.log(c) * (np.log(d) - np.log(t) + 1)
-                    - np.log(d) * np.log(t)
-                    + np.log(d)
-                    + np.log(t) ** 2
-                    - 2 * np.log(t)
+                    paddle.log(c) * (paddle.log(d) - paddle.log(t) + 1)
+                    - paddle.log(d) * paddle.log(t)
+                    + paddle.log(d)
+                    + paddle.log(t) ** 2
+                    - 2 * paddle.log(t)
                     + 2
                 )
-                denominator = (np.log(b) - np.log(c)) * (np.log(b) - np.log(d))
+                denominator = (paddle.log(b) - paddle.log(c)) * (paddle.log(b) - paddle.log(d))
                 return numerator / denominator
 
             coef1 = ind_fn(rho_t, rho_s0, rho_s1, rho_s2) - ind_fn(rho_s0, rho_s0, rho_s1, rho_s2)

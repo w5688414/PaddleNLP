@@ -78,8 +78,15 @@ def get_parameter_dtype(parameter: nn.Layer) -> paddle.dtype:
 
 def convert_state_dict(state_dict, framework="torch"):
     if framework in ["torch", "pt"]:
-        state_dict = {k: torch.tensor(v.cpu().numpy()) for k, v in state_dict.items()}
-        return state_dict
+        # support bfloat16
+        newstate_dict = {}
+        for k, v in state_dict.items():
+            if v.dtype == paddle.bfloat16:
+                v = v.cast("float32").cpu().numpy()
+                newstate_dict[k] = torch.tensor(v).to(torch.bfloat16)
+            else:
+                newstate_dict[k] = torch.tensor(v.cpu().numpy())
+        return newstate_dict
     elif framework in ["numpy", "np"]:
         state_dict = {k: v.cpu().numpy() for k, v in state_dict.items()}
         return state_dict
@@ -455,17 +462,17 @@ class ModelMixin(nn.Layer):
                         logger.warning("Deleting key {} from state_dict.".format(k))
                         del state_dict[k]
 
-        # dtype = set(v.dtype for v in state_dict.values())
-        # if len(dtype) > 1 and paddle.float32 not in dtype:
-        #     raise ValueError(
-        #         f"The weights of the model file {model_file} have a mixture of incompatible dtypes {dtype}. Please"
-        #         f" make sure that {model_file} weights have only one dtype."
-        #     )
-        # elif len(dtype) > 1 and paddle.float32 in dtype:
-        #     dtype = paddle.float32
-        # else:
-        #     dtype = dtype.pop()
-        # model = model.to(dtype=dtype)
+        dtype = set(v.dtype for v in state_dict.values())
+        if len(dtype) > 1 and paddle.float32 not in dtype:
+            raise ValueError(
+                f"The weights of the model file {model_file} have a mixture of incompatible dtypes {dtype}. Please"
+                f" make sure that {model_file} weights have only one dtype."
+            )
+        elif len(dtype) > 1 and paddle.float32 in dtype:
+            dtype = paddle.float32
+        else:
+            dtype = dtype.pop()
+        model = model.to(dtype=dtype)
 
         model, missing_keys, unexpected_keys, mismatched_keys, error_msgs = cls._load_pretrained_model(
             model,
