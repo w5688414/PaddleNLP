@@ -253,6 +253,7 @@ class DiffusionPipeline(ConfigMixin):
         save_directory: Union[str, os.PathLike],
         safe_serialization: bool = False,
         variant: Optional[str] = None,
+        to_diffusers: bool = False,
     ):
         """
         Save all variables of the pipeline that can be saved and loaded as well as the pipelines configuration file to
@@ -311,12 +312,15 @@ class DiffusionPipeline(ConfigMixin):
             save_method_signature = inspect.signature(save_method)
             save_method_accept_safe = "safe_serialization" in save_method_signature.parameters
             save_method_accept_variant = "variant" in save_method_signature.parameters
+            save_method_accept_to_diffusers = "to_diffusers" in save_method_signature.parameters
 
             save_kwargs = {}
             if save_method_accept_safe:
                 save_kwargs["safe_serialization"] = safe_serialization
             if save_method_accept_variant:
                 save_kwargs["variant"] = variant
+            if save_method_accept_to_diffusers:
+                save_kwargs["to_diffusers"] = to_diffusers
 
             save_method(os.path.join(save_directory, pipeline_component_name), **save_kwargs)
 
