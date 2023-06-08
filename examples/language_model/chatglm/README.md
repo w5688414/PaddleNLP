@@ -269,3 +269,9 @@ python infer_generation.py \
     --model_path  ./checkpoints/infer \
     --model_prefix chatglm
 ```
+
+## 模型服务化
+
+```
+uvicorn server:app --reload --port 8866 --host '0.0.0.0'
+```
