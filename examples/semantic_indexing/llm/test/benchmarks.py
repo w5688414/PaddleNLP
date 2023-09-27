@@ -48,7 +48,7 @@ class PaddleModel:
                 (doc["title"] + self.sep + doc["text"]).strip() if "title" in doc else doc["text"].strip()
                 for doc in corpus
             ]
-        return self.query_model.run(sentences, batch_size=batch_size, max_seq_len=788, **kwargs)
+        return self.query_model.run(sentences, batch_size=batch_size, max_seq_len=768, **kwargs)
 
 
 class T2RRetrieval(AbsTaskRetrieval):
