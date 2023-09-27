@@ -503,6 +503,8 @@ class PretrainedConfig:
         self.output_hidden_states = kwargs.pop("output_hidden_states", False)
         self.output_attentions = kwargs.pop("output_attentions", False)
         self.use_cache = kwargs.pop("use_cache", False)
+        self.use_flash_attention = kwargs.pop("use_flash_attention", False)
+        self.quantization_config = kwargs.pop("quantization_config", None)
 
         self.pruned_heads = kwargs.pop("pruned_heads", {})
         self.tie_word_embeddings = kwargs.pop(
@@ -521,6 +523,8 @@ class PretrainedConfig:
         # If set to True, this option is used with fleet.meta_parallel.ParallelCrossEntropy
         # to calculate cross-entropy loss for parallel model.
         self.tensor_parallel_output = kwargs.pop("tensor_parallel_output", False)
+        # Temporary switch to control hook vs. PyLayer implementation of recompute
+        self.recompute_use_reentrant = kwargs.pop("recompute_use_reentrant", False)
 
         # Is decoder is used in encoder-decoder models to differentiate encoder from decoder
         self.is_encoder_decoder = kwargs.pop("is_encoder_decoder", False)

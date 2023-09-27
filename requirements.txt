@@ -18,3 +18,5 @@ fastapi
 uvicorn
 typer
 rich
+safetensors
+tool_helpers
